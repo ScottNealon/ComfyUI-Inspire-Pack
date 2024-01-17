@@ -160,6 +160,7 @@ class RegionalConditioningColorMask:
         return (conditioning, mask)
 
 
+# IPAdapter
 class ToIPAdapterPipe:
     @classmethod
     def INPUT_TYPES(s):
@@ -168,6 +169,9 @@ class ToIPAdapterPipe:
                 "ipadapter": ("IPADAPTER", ),
                 "clip_vision": ("CLIP_VISION",),
                 "model": ("MODEL", ),
+            },
+            "optional": {
+                "insightface_opt": ("INSIGHTFACE",),
             }
         }
 
@@ -176,8 +180,8 @@ class ToIPAdapterPipe:
 
     CATEGORY = "InspirePack/Util"
 
-    def doit(self, ipadapter, clip_vision, model):
-        pipe = ipadapter, clip_vision, model
+    def doit(self, ipadapter, clip_vision, model, insightface_opt=None):
+        pipe = ipadapter, clip_vision, model, insightface_opt
 
         return (pipe,)
 
@@ -201,7 +205,8 @@ class FromIPAdapterPipe:
 
 
 class IPAdapterConditioning:
-    def __init__(self, mask, weight, weight_type, noise=None, image=None, embeds=None, start_at=0.0, end_at=1.0, unfold_batch=False):
+    def __init__(self, mask, weight, weight_type, noise=None, image=None, embeds=None, start_at=0.0, end_at=1.0, unfold_batch=False,
+                 mode="normal", weight_v2=False):
         self.mask = mask
         self.image = image
         self.embeds = embeds
@@ -211,8 +216,10 @@ class IPAdapterConditioning:
         self.start_at = start_at
         self.end_at = end_at
         self.unfold_batch = unfold_batch
+        self.mode = mode
+        self.weight_v2 = weight_v2
 
-    def doit(self, ipadapter, clip_vision, model):
+    def doit(self, ipadapter, clip_vision, model, insightface=None):
         if 'IPAdapterApply' not in nodes.NODE_CLASS_MAPPINGS:
             utils.try_install_custom_node('https://github.com/ltdrdata/ComfyUI-Impact-Pack',
                                           "To use 'Regional IPAdapter' node, 'Impact Pack' extension is required.")
@@ -223,10 +230,20 @@ class IPAdapterConditioning:
         if self.image is None:
             clip_vision = None
 
+        faceid_v2 = False
+        weight_v2 = False
+        if self.mode == "faceid":
+            weight_v2 = self.weight_v2
+        elif self.mode == "faceid_v2":
+            weight_v2 = self.weight_v2
+            faceid_v2 = True
+        else:
+            insightface = None
+
         model = obj().apply_ipadapter(ipadapter, model, self.weight, clip_vision=clip_vision, image=self.image,
                                       embeds=self.embeds, weight_type=self.weight_type, noise=self.noise,
                                       attn_mask=self.mask, start_at=self.start_at, end_at=self.end_at,
-                                      unfold_batch=self.unfold_batch)[0]
+                                      unfold_batch=self.unfold_batch, faceid_v2=faceid_v2, weight_v2=weight_v2, insightface=insightface)[0]
 
         return model
 
@@ -245,6 +262,8 @@ class RegionalIPAdapterMask:
                 "start_at": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.001}),
                 "end_at": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.001}),
                 "unfold_batch": ("BOOLEAN", {"default": False}),
+                "mode": (["normal", "faceid", "faceid_v2"],),
+                "weight_v2": ("FLOAT", {"default": 1.0, "min": -1, "max": 3, "step": 0.05}),
             },
         }
 
@@ -253,8 +272,10 @@ class RegionalIPAdapterMask:
 
     CATEGORY = "InspirePack/Regional"
 
-    def doit(self, mask, image, weight, noise, weight_type, start_at=0.0, end_at=1.0, unfold_batch=False):
-        cond = IPAdapterConditioning(mask, weight, weight_type, noise=noise, image=image, start_at=start_at, end_at=end_at, unfold_batch=unfold_batch)
+    def doit(self, mask, image, weight, noise, weight_type, start_at=0.0, end_at=1.0, unfold_batch=False,
+             mode="normal", weight_v2=False):
+        cond = IPAdapterConditioning(mask, weight, weight_type, noise=noise, image=image, start_at=start_at, end_at=end_at,
+                                     unfold_batch=unfold_batch, mode=mode, weight_v2=weight_v2)
         return (cond, )
 
 
@@ -273,6 +294,8 @@ class RegionalIPAdapterColorMask:
                 "start_at": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.001}),
                 "end_at": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.001}),
                 "unfold_batch": ("BOOLEAN", {"default": False}),
+                "mode": (["normal", "faceid", "faceid_v2"],),
+                "weight_v2": ("FLOAT", {"default": 1.0, "min": -1, "max": 3, "step": 0.05}),
             },
         }
 
@@ -281,9 +304,11 @@ class RegionalIPAdapterColorMask:
 
     CATEGORY = "InspirePack/Regional"
 
-    def doit(self, color_mask, mask_color, image, weight, noise, weight_type, start_at=0.0, end_at=1.0, unfold_batch=False):
+    def doit(self, color_mask, mask_color, image, weight, noise, weight_type, start_at=0.0, end_at=1.0, unfold_batch=False,
+             mode="normal", weight_v2=False):
         mask = color_to_mask(color_mask, mask_color)
-        cond = IPAdapterConditioning(mask, weight, weight_type, noise=noise, image=image, start_at=start_at, end_at=end_at, unfold_batch=unfold_batch)
+        cond = IPAdapterConditioning(mask, weight, weight_type, noise=noise, image=image, start_at=start_at, end_at=end_at,
+                                     unfold_batch=unfold_batch, mode=mode, weight_v2=weight_v2)
         return (cond, mask)
 
 
@@ -357,12 +382,12 @@ class ApplyRegionalIPAdapters:
 
     def doit(self, **kwargs):
         ipadapter_pipe = kwargs['ipadapter_pipe']
-        ipadapter, clip_vision, model = ipadapter_pipe
+        ipadapter, clip_vision, model, insightface = ipadapter_pipe
 
         del kwargs['ipadapter_pipe']
 
         for k, v in kwargs.items():
-            model = v.doit(ipadapter, clip_vision, model)
+            model = v.doit(ipadapter, clip_vision, model, insightface=insightface)
 
         return (model, )
 
